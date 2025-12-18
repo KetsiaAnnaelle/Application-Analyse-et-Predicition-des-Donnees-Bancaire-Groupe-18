@@ -2,7 +2,7 @@ from sqlmodel import Field, SQLModel, create_engine,Session,Relationship
 from typing import List, Optional
 import hashlib
 import random
-from datetime import date
+from datetime import date, datetime
 
 
 def hash_mdp(mdp):
@@ -52,6 +52,15 @@ class Transaction(SQLModel, table=True):
     categorie: str = Field(max_length=150)
     montant: float = Field(default=0.0)
     client: Optional["Client"] = Relationship(back_populates="transactions")
+
+class CreditRequest(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    client_id: int = Field(foreign_key="client.client_id")
+    amount: float
+    duration_months: int
+    purpose: str
+    status: str = Field(default="pending")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
 
 sqlite_file_name = "database.db"
 sqlite_url = f"sqlite:///{sqlite_file_name}"
@@ -274,6 +283,15 @@ def main():
         random.shuffle(transactions_data)
         for id_client, nom_transaction, date_transaction, type_transaction, categorie,montant in transactions_data:
             add_transaction(id_client, nom_transaction, date_transaction, type_transaction, categorie,montant)
+
+        # Demandes de crédit initiales (exemple)
+        credit_requests_seed = [
+            CreditRequest(client_id=1, amount=2_000_000, duration_months=24, purpose="Achat véhicule", status="pending"),
+            CreditRequest(client_id=2, amount=800_000, duration_months=12, purpose="Crédit à la consommation", status="pending"),
+            CreditRequest(client_id=3, amount=5_000_000, duration_months=36, purpose="Achat immobilier", status="rejected"),
+        ]
+        session.add_all(credit_requests_seed)
+        session.commit()
 
 
 if __name__ == "__main__":

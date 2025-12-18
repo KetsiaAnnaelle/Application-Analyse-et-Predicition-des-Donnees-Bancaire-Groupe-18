@@ -13,6 +13,7 @@ from tables__projet import (
     Client,
     Administrateur,
     Connexion_client,
+    CreditRequest,
     create_db_and_table,
     engine,
     hash_mdp,
@@ -302,19 +303,31 @@ def create_app() -> Flask:
         if not amount or not duration or not purpose:
             return jsonify({"error": "Amount, duration, and purpose are required"}), 400
 
-        # Store credit request (in a real app, you'd have a CreditRequest table)
-        # For now, we'll return success and the request details
-        return jsonify({
-            "success": True,
-            "message": "Credit request submitted successfully",
-            "request": {
-                "clientId": user_id,
-                "amount": float(amount),
-                "duration": int(duration),
-                "purpose": purpose,
-                "status": "pending"
-            }
-        })
+        with Session(engine) as db_session:
+            credit = CreditRequest(
+                client_id=user_id,
+                amount=float(amount),
+                duration_months=int(duration),
+                purpose=purpose,
+                status="pending",
+            )
+            db_session.add(credit)
+            db_session.commit()
+            db_session.refresh(credit)
+
+            return jsonify({
+                "success": True,
+                "message": "Credit request submitted successfully",
+                "request": {
+                    "id": credit.id,
+                    "clientId": credit.client_id,
+                    "amount": credit.amount,
+                    "duration": credit.duration_months,
+                    "purpose": credit.purpose,
+                    "status": credit.status,
+                    "created_at": credit.created_at.isoformat()
+                }
+            })
 
     @app.post("/api/chat/predict")
     def chat_predict():
@@ -391,6 +404,73 @@ def create_app() -> Flask:
                 "transactionCount": transaction_count
             }
         })
+
+    @app.get("/api/admin/credit-requests")
+    def admin_credit_requests():
+        """List credit requests (optionally filtered by client_id). Admin only."""
+        if session.get("user_type") != "admin":
+            return jsonify({"error": "Admin authentication required"}), 403
+
+        client_id = request.args.get("client_id", type=int)
+
+        with Session(engine) as db_session:
+            stmt = select(CreditRequest)
+            if client_id:
+                stmt = stmt.where(CreditRequest.client_id == client_id)
+            stmt = stmt.order_by(CreditRequest.created_at.desc())
+            requests_list = db_session.exec(stmt).all()
+
+            # preload client mapping for names
+            clients = db_session.exec(select(Client)).all()
+            client_map = {c.client_id: c for c in clients}
+
+            data = []
+            for r in requests_list:
+                c = client_map.get(r.client_id)
+                data.append({
+                    "id": r.id,
+                    "clientId": r.client_id,
+                    "clientName": f"{c.prenom} {c.nom}" if c else f"Client {r.client_id}",
+                    "amount": float(r.amount),
+                    "duration": int(r.duration_months),
+                    "purpose": r.purpose,
+                    "status": r.status,
+                    "created_at": r.created_at.isoformat()
+                })
+        return jsonify({"requests": data})
+
+    @app.post("/api/admin/credit-requests/<int:req_id>/status")
+    def admin_update_credit_request(req_id: int):
+        """Approve or reject a credit request. Admin only."""
+        if session.get("user_type") != "admin":
+            return jsonify({"error": "Admin authentication required"}), 403
+
+        data = request.get_json() or {}
+        status = (data.get("status") or "").lower()
+        if status not in ("approved", "rejected"):
+            return jsonify({"error": "Status must be 'approved' or 'rejected'"}), 400
+
+        with Session(engine) as db_session:
+            credit = db_session.get(CreditRequest, req_id)
+            if not credit:
+                return jsonify({"error": "Credit request not found"}), 404
+            credit.status = status
+            db_session.add(credit)
+            db_session.commit()
+            db_session.refresh(credit)
+
+            return jsonify({
+                "success": True,
+                "request": {
+                    "id": credit.id,
+                    "clientId": credit.client_id,
+                    "status": credit.status,
+                    "amount": credit.amount,
+                    "duration": credit.duration_months,
+                    "purpose": credit.purpose,
+                    "created_at": credit.created_at.isoformat(),
+                }
+            })
 
     @app.get("/api/admin/clients")
     def admin_list_clients():
